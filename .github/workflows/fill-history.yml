@@ -17,7 +17,7 @@ on:
       daily_commits:
         description: '每天提交次数 (用于历史填充)'
         required: true
-        default: '10'
+        default: '12'
 
 jobs:
   fill:
@@ -25,7 +25,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # 修改1：拉取完整仓库历史，解决浅克隆导致的提交解析报错
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configure Git
         run: |
@@ -40,20 +43,22 @@ jobs:
         run: |
           # 判断触发方式
           if [ "${{ github.event_name }}" == "schedule" ]; then
-            # 定时触发：生成今天提交
+            # 定时触发：生成当天提交
             TODAY=$(date +%Y-%m-%d)
-            COMMITS_PER_DAY=12   # 每天提交次数，可按需修改
+            COMMITS_PER_DAY=12
             echo "Daily run: generating $COMMITS_PER_DAY commits for $TODAY"
             for i in $(seq 1 $COMMITS_PER_DAY); do
               git commit --allow-empty -m "daily fill #$i on $TODAY"
             done
           else
-            # 手动触发：生成历史提交
+            # 手动触发：生成区间历史提交
             if [ -z "$END_DATE" ]; then
               END_DATE=$(date +%Y-%m-%d)
             fi
             current_date="$START_DATE"
-            while [ "$current_date" != "$END_DATE" ]; do
+            # 修改2：修复日期边界，包含结束日期当天的提交
+            END_DATE_TS=$(date -d "$END_DATE" +%s)
+            while [ $(date -d "$current_date" +%s) -le "$END_DATE_TS" ]; do
               echo "Generating $DAILY_COMMITS commits for $current_date"
               for i in $(seq 1 $DAILY_COMMITS); do
                 export GIT_AUTHOR_DATE="$current_date 12:00:00"
@@ -66,10 +71,13 @@ jobs:
 
       - name: Push commits
         run: |
+          # 修改3：明确推送分支，提升稳定性；强制推送更安全
+          # 如果你的仓库默认分支是 master，请把这里改为 master
+          DEFAULT_BRANCH="main"
           if [ "${{ github.event_name }}" == "schedule" ]; then
-            # 定时任务：普通推送（追加）
-            git push origin HEAD
+            # 定时任务：普通追加推送
+            git push origin "$DEFAULT_BRANCH"
           else
-            # 手动任务：强制推送（覆盖历史）
-            git push --force origin HEAD
+            # 手动任务：强制推送覆盖历史
+            git push --force-with-lease origin "$DEFAULT_BRANCH"
           fi
